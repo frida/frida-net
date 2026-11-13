@@ -133,7 +133,6 @@ jobs:
           - linux-x86_64
           - linux-armhf
           - linux-arm64
-          - linux-mips64
     steps:
       - uses: actions/checkout@v7
         with:
@@ -152,21 +151,48 @@ jobs:
           case "${{ matrix.host }}" in
             linux-armhf) host=arm-linux-gnueabihf; pkgs="gcc-$host g++-$host" ;;
             linux-arm64) host=aarch64-linux-gnu; pkgs="gcc-$host g++-$host" ;;
-            linux-mips64) host=mips64-linux-gnuabi64; pkgs="gcc-$host g++-$host" ;;
             linux-x86) host=linux-x86; pkgs="gcc-multilib g++-multilib" ;;
             *) host="${{ matrix.host }}"; pkgs="" ;;
           esac
           if [ -n "$pkgs" ]; then sudo apt-get update && sudo apt-get install -y $pkgs; fi
-          # mips64 lacks Go cgo cross support, so let it fall back to auto
-          if [ "${{ matrix.host }}" = "linux-mips64" ]; then
-            ./configure --host="$host"
-          else
-            ./configure --host="$host" -- -Dfrida-core:compiler_backend=enabled
-          fi
+          ./configure --host="$host" -- -Dfrida-core:compiler_backend=enabled
       - run: make
       - uses: actions/upload-artifact@v7
         with:
           name: packages-${{ matrix.host }}
+          path: build/**/*.nupkg
+
+  linux-mips64:
+    runs-on: ubuntu-latest
+    container: debian:stable
+    steps:
+      - name: Install toolchain
+        run: |
+          apt-get update
+          apt-get install -y \
+              ca-certificates \
+              curl \
+              g++ \
+              g++-mips64-linux-gnuabi64 \
+              git \
+              libicu-dev \
+              make \
+              python3 \
+              xz-utils
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: ./configure --host=mips64-linux-gnuabi64
+      - run: make
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages-linux-mips64
           path: build/**/*.nupkg
 
   publish:
@@ -175,6 +201,7 @@ jobs:
       - windows-arm64
       - macos
       - linux
+      - linux-mips64
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     environment: production
