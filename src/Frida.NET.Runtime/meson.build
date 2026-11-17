@@ -3,17 +3,59 @@ fs = import('fs')
 if frida_core_dep.type_name() == 'internal'
   frida_core_subprj = subproject('frida-core')
   frida_core_lib = frida_core_subprj.get_variable('core_public_lib')
+  frida_core_header = frida_core_subprj.get_variable('core_public_h')
 else
   frida_core_lib = frida_core_dep
+  frida_core_includedir = frida_core_dep.get_variable('frida_includedir')
+  if fs.exists(frida_core_includedir / 'frida-core.h')
+    frida_core_header = frida_core_includedir / 'frida-core.h'
+  else
+    frida_core_header = frida_core_includedir / 'frida-1.0' / 'frida-core.h'
+  endif
 endif
 
 host_system = host_machine.system()
 
-wrapper_sources = files('frida-wrapper.c')
+glib_archive_args = []
+if host_system != 'windows'
+  glib_libdir = dependency('glib-2.0').get_variable('libdir')
+  glib_archive_args += ['--nm', find_program('nm')]
+  foreach name : ['glib-2.0', 'gobject-2.0', 'gio-2.0']
+    glib_archive_args += ['--archive', glib_libdir / f'lib@name@.a']
+  endforeach
+endif
+
+exports = custom_target('frida-exports',
+  input: [frida_core_header, 'glib.exports'],
+  output: ['Frida.def', 'Frida.version', 'Frida.symbols', 'frida-exports.c'],
+  command: [
+    find_program('python3'),
+    files('generate-exports.py'),
+    '--core-header', '@INPUT0@',
+    '--glib-exports', '@INPUT1@',
+    glib_archive_args,
+    '--output-def', '@OUTPUT0@',
+    '--output-version-script', '@OUTPUT1@',
+    '--output-symbol-list', '@OUTPUT2@',
+    '--output-references', '@OUTPUT3@',
+  ],
+)
+
+wrapper_sources = files('frida-wrapper.c') + [exports[3]]
 
 frida_dll_kwargs = {}
 if host_system == 'windows'
-  frida_dll_kwargs += {'vs_module_defs': 'Frida.def'}
+  frida_dll_kwargs += {'vs_module_defs': exports[0]}
+elif host_system == 'darwin'
+  frida_dll_kwargs += {
+    'link_args': ['-Wl,-exported_symbols_list,' + exports[2].full_path()],
+    'link_depends': exports[2],
+  }
+else
+  frida_dll_kwargs += {
+    'link_args': ['-Wl,--version-script,' + exports[1].full_path()],
+    'link_depends': exports[1],
+  }
 endif
 
 frida_dll = shared_library(
