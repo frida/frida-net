@@ -31,6 +31,9 @@ internal static class WrapperEmitter
 
         EmitConstructor(writer, cls, field, signals);
 
+        foreach (var factory in Factories(cls))
+            EmitFactory(writer, cls, factory);
+
         var properties = cls.Properties.Where(p => p.Readable && IsExposableProperty(cls, p)).ToList();
         foreach (var property in properties)
             EmitProperty(writer, cls, property, field);
@@ -83,9 +86,32 @@ internal static class WrapperEmitter
         writer.Blank();
     }
 
+    private static IEnumerable<Function> Factories(Class cls)
+        => cls.Functions.Where(f =>
+            f.ReturnType.AnyType.TryPickT0(out var t, out _) &&
+            t is Class c && c.Namespace.Name == "Frida" && c.Name == cls.Name &&
+            f.Parameters.All(p => Classify(p) is ParamKind.Simple or ParamKind.String));
+
+    private static void EmitFactory(SourceWriter writer, Class cls, Function factory)
+    {
+        var name = Pascal(factory.Name);
+        var parameters = string.Join(", ", factory.Parameters.Select(p => $"{CsType(ParamType(p), p.Nullable)} {Camel(p.Name)}"));
+        var args = string.Join(", ", factory.Parameters.Select(p => Camel(p.Name)));
+        writer.Line($"public static Frida{cls.Name} {name}({parameters})");
+        writer.Open();
+        writer.Line($"return new Frida{cls.Name}({cls.Name}.{name}({args}));");
+        writer.Close();
+        writer.Blank();
+    }
+
     private static void EmitProperty(SourceWriter writer, Class cls, Property property, string field)
     {
         var name = PropertyName(property.Name);
+        if (IsStringArray(property.AnyType))
+        {
+            writer.Line($"public string[] {name} => {field}.{Pascal(property.Name)};");
+            return;
+        }
         if (Getter(cls, property) is { } getter && IsForeign(property.AnyType))
         {
             if (IsVariant(property.AnyType))
@@ -449,12 +475,17 @@ internal static class WrapperEmitter
 
     private static bool IsExposableProperty(Class cls, Property p)
     {
+        if (IsStringArray(p.AnyType))
+            return true;
         if (!p.AnyType.TryPickT0(out var t, out _))
             return false;
         if (t is PrimitiveType || t is Enumeration)
             return true;
         return IsForeign(p.AnyType) && Getter(cls, p) != null;
     }
+
+    private static bool IsStringArray(AnyType type)
+        => type.TryPickT1(out var array, out _) && array.AnyType.TryPickT0(out var element, out _) && element is GirModel.String;
 
     private static bool IsFridaEnum(GirModel.Type t)
         => t is Enumeration e && e.Namespace.Name == "Frida";
